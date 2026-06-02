@@ -1,0 +1,32 @@
+# GPU (CUDA) 이미지
+# torch는 베이스 이미지에 포함되어 있으므로 별도 설치 불필요
+# 빌드: docker build -f Dockerfile.gpu -t bge-m3-server:gpu .
+# 실행: docker run --gpus all -p 3000:3000 bge-m3-server:gpu
+FROM pytorch/pytorch:2.6.0-cuda12.4-cudnn9-runtime
+
+WORKDIR /app
+
+# 시스템 패키지
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends curl && \
+    rm -rf /var/lib/apt/lists/*
+
+# torch 제외한 의존성 설치 (베이스 이미지에 이미 포함)
+COPY requirements.txt .
+RUN grep -v "^torch" requirements.txt > requirements_notorch.txt && \
+    pip install --no-cache-dir -r requirements_notorch.txt && \
+    rm requirements_notorch.txt
+
+# 소스 복사
+COPY . .
+
+# HuggingFace 모델 캐시 위치 (볼륨 마운트 권장)
+ENV HF_HOME=/app/models
+
+EXPOSE 3000
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=120s --retries=3 \
+    CMD curl -f http://localhost:3000/health || exit 1
+
+ENTRYPOINT ["python", "server.py"]
+CMD ["--device", "cuda", "--fp16"]
