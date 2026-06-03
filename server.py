@@ -1,4 +1,5 @@
 import argparse
+import json
 import logging
 import os
 import sys
@@ -7,7 +8,7 @@ from typing import List
 
 import torch
 import uvicorn
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from FlagEmbedding import BGEM3FlagModel
 
@@ -167,6 +168,22 @@ def create_app(args: argparse.Namespace) -> FastAPI:
         allow_headers=["*"],
     )
 
+    @app.middleware("http")
+    async def log_requests(request: Request, call_next):
+        body = await request.body()  # Starlette caches body after first read
+        if logger.isEnabledFor(logging.DEBUG):
+            all_headers = dict(request.headers)
+            logger.debug(
+                ">> %s %s\n  headers: %s\n  body: %d bytes | preview: %s",
+                request.method, request.url.path,
+                all_headers,
+                len(body),
+                body[:200] if body else b"(empty)",
+            )
+        response = await call_next(request)
+        logger.debug("<< %s %s → %d", request.method, request.url.path, response.status_code)
+        return response
+
     def get_runner() -> EmbeddingRunner:
         if _runner is None:
             raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Model is not ready")
@@ -196,7 +213,7 @@ def create_app(args: argparse.Namespace) -> FastAPI:
         tags=["Embedding"],
         summary="Create embeddings (OpenAI-compatible)",
     )
-    async def create_embeddings(request: OpenAIEmbeddingRequest):
+    async def create_embeddings(raw: Request):
         """
         Drop-in replacement for OpenAI `/v1/embeddings`.
 
@@ -205,6 +222,19 @@ def create_app(args: argparse.Namespace) -> FastAPI:
 
         Returns 1024-dim dense vectors.
         """
+        # Content-Type에 무관하게 body를 직접 파싱 (LangChain4j JdkHttpClient 호환)
+        body_bytes = await raw.body()
+        if not body_bytes:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Request body is empty")
+        try:
+            body_data = json.loads(body_bytes)
+        except json.JSONDecodeError as e:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, f"Invalid JSON body: {e}")
+        try:
+            request = OpenAIEmbeddingRequest(**body_data)
+        except Exception as e:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(e))
+
         if request.encoding_format not in ("float", "base64"):
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "encoding_format must be 'float' or 'base64'")
 
