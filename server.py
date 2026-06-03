@@ -1,4 +1,5 @@
 import argparse
+import asyncio
 import json
 import logging
 import os
@@ -6,8 +7,9 @@ import sys
 from contextlib import asynccontextmanager
 from typing import List
 
+import hypercorn.asyncio
+import hypercorn.config
 import torch
-import uvicorn
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from FlagEmbedding import BGEM3FlagModel
@@ -268,7 +270,12 @@ def main():
     args = _parse_args()
     logging.getLogger().setLevel(args.log_level.upper())
     app = create_app(args)
-    uvicorn.run(app, host=args.host, port=args.port, log_level=args.log_level)
+
+    config = hypercorn.config.Config()
+    config.bind = [f"{args.host}:{args.port}"]
+    config.loglevel = args.log_level.upper()
+
+    asyncio.run(hypercorn.asyncio.serve(app, config))
 
 
 if __name__ == "__main__":
